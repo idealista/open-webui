@@ -6,10 +6,10 @@ repository:
   usage: none
 jobs:
   jenkinsfile:
-    - name: build-and-register-main
+    - name: build-and-register-master
       file: jenkins/buildAndRegister
       upstream:
-        scmBranch: main
+        scmBranch: master
         scm: true
 
     - name: build-and-register-dev
