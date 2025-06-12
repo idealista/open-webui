@@ -1,0 +1,74 @@
+pipeline {
+    // Configure the agent where the pipeline stages will run.
+    agent {
+        label 'docker'
+    }
+
+    // This directive ensures the pipeline only runs for specific branches.
+    // 'anyOf' allows specifying multiple conditions.
+    // The build will only proceed if the current branch is 'main' OR 'dev'.
+    when {
+        anyOf {
+            branch 'main'
+            branch 'dev'
+        }
+    }
+
+    environment {
+        REGISTRY = 'nexus.int.sys.idealista:9081'
+        BASE_IMAGE_NAME = "${REGISTRY}/open-webui"
+    }
+    stages {
+        // Stage to determine the correct tag based on the branch
+        stage('Setup Tag') {
+            steps {
+                script {
+                    def targetTag
+                    // Determine the tag based on the branch name
+                    if (env.BRANCH_NAME == 'main') {
+                        targetTag = 'latest'
+                    } else if (env.BRANCH_NAME == 'dev') {
+                        targetTag = 'dev'
+                    } else {
+                         // This case should theoretically not be reached due to the 'when' clause,
+                         // but it's good for robustness.
+                         error("Pipeline misconfiguration: Building on unexpected branch '${env.BRANCH_NAME}'. Expected 'main' or 'dev'.")
+                    }
+
+                    // Set environment variables that subsequent stages will use
+                    // Note: Setting env variables inside a 'script' block makes them available
+                    // for the rest of the pipeline run.
+                    env.TARGET_TAG = targetTag
+                    env.FULL_TARGET_IMAGE = "${env.BASE_IMAGE_NAME}:${env.TARGET_TAG}"
+
+                    echo "Determined target image tag: ${env.TARGET_TAG}"
+                    echo "Full target image name: ${env.FULL_TARGET_IMAGE}"
+                }
+            }
+        }
+
+        stage('Build image') {
+            steps {
+                echo "Building Docker image: ${env.FULL_TARGET_IMAGE}"
+                // Build the image using the Dockerfile in the root of the repo
+                // Tag it directly with the determined target tag (dev or latest)
+                sh "docker build -t ${env.FULL_TARGET_IMAGE} ."
+            }
+        }
+
+        stage('Test image') {
+            steps {
+                echo "Testing Docker image: ${env.FULL_TARGET_IMAGE}"
+                // TODO: Add your image testing logic here
+                echo "TODO: Implement image testing logic"
+            }
+        }
+
+        stage('Push image') {
+            steps {
+                echo "Pushing Docker image ${env.FULL_TARGET_IMAGE} to ${env.REGISTRY}"
+                sh "docker push ${env.FULL_TARGET_IMAGE}"
+            }
+        }
+    }
+}
