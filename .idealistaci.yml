@@ -7,18 +7,12 @@ repository:
 jobs:
   jenkinsfile:
     - name: build-and-register-dev
-      file: jenkins/buildAndRegisterDevelop
+      file: jenkins/buildAndRegisterDev
       upstream:
-        scmBranch: develop
+        scmBranch: dev
         scm: true
-    - name: build-and-register-prod  
+    - name: build-and-register-prod
       file: jenkins/buildAndRegister
       upstream:
         scmBranch: master
         scm: true
-
-
-
-
-
-        
