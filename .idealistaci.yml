@@ -1,0 +1,19 @@
+info:
+  name: docker-id-open-webui
+  group: IDEALISTADATA
+repository:
+  format: none
+  usage: none
+jobs:
+  jenkinsfile:
+    - name: build-and-register-main
+      file: jenkins/buildAndRegister
+      upstream:
+        scmBranch: main
+        scm: true
+
+    - name: build-and-register-dev
+      file: jenkins/buildAndRegister
+      upstream:
+        scmBranch: dev
+        scm: true
