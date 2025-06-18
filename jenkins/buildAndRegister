@@ -11,6 +11,12 @@ pipeline {
     stages {
         // Stage to determine the correct tag based on the branch
         stage('Setup Tag') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 script {
                     def targetTag
@@ -38,6 +44,12 @@ pipeline {
         }
 
         stage('Build image') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 echo "Building Docker image: ${env.FULL_TARGET_IMAGE}"
                 // Build the image using the Dockerfile in the root of the repo
@@ -47,6 +59,12 @@ pipeline {
         }
 
         stage('Test image') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 echo "Testing Docker image: ${env.FULL_TARGET_IMAGE}"
                 // TODO: Add your image testing logic here
@@ -55,6 +73,12 @@ pipeline {
         }
 
         stage('Push image') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 echo "Pushing Docker image ${env.FULL_TARGET_IMAGE} to ${env.REGISTRY}"
                 sh "docker push ${env.FULL_TARGET_IMAGE}"
