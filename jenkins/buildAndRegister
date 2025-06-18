@@ -15,14 +15,14 @@ pipeline {
                 script {
                     def targetTag
                     // Determine the tag based on the branch name
-                    if (env.BRANCH_NAME == 'master') {
+                    if (env.GIT_LOCAL_BRANCH == 'master') {
                         targetTag = 'latest'
-                    } else if (env.BRANCH_NAME == 'dev') {
+                    } else if (env.GIT_LOCAL_BRANCH == 'dev') {
                         targetTag = 'dev'
                     } else {
                          // This case should theoretically not be reached due to the 'when' clause,
                          // but it's good for robustness.
-                         error("Pipeline misconfiguration: Building on unexpected branch '${env.BRANCH_NAME}'. Expected 'master' or 'dev'.")
+                         error("Pipeline misconfiguration: Building on unexpected branch '${env.GIT_LOCAL_BRANCH}'. Expected 'master' or 'dev'.")
                     }
 
                     // Set environment variables that subsequent stages will use
