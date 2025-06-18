@@ -8,6 +8,8 @@ from open_webui.models.knowledge import (
     KnowledgeForm,
     KnowledgeResponse,
     KnowledgeUserResponse,
+    KnowledgeUrlForm,
+    ExtractUrlMode,
 )
 from open_webui.models.files import Files, FileModel, FileMetadataResponse
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
@@ -22,6 +24,13 @@ from open_webui.storage.provider import Storage
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.utils.auth import get_verified_user
 from open_webui.utils.access_control import has_access, has_permission
+
+# Import here to avoid circular imports
+from open_webui.retrieval.loaders.main import Loader
+from langchain_core.documents import Document
+from open_webui.models.files import FileForm
+from open_webui.socket.main import get_event_emitter
+import uuid
 
 
 from open_webui.env import SRC_LOG_LEVELS
@@ -256,13 +265,11 @@ async def get_knowledge_by_id(id: str, user=Depends(get_verified_user)):
     knowledge = Knowledges.get_knowledge_by_id(id=id)
 
     if knowledge:
-
         if (
             user.role == "admin"
             or knowledge.user_id == user.id
             or has_access(user.id, "read", knowledge.access_control)
         ):
-
             file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
             files = Files.get_file_metadatas_by_ids(file_ids)
 
@@ -434,7 +441,6 @@ def update_file_from_knowledge_by_id(
         and not has_access(user.id, "write", knowledge.access_control)
         and user.role != "admin"
     ):
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
@@ -758,3 +764,221 @@ def add_files_to_knowledge_batch(
         **knowledge.model_dump(),
         files=Files.get_file_metadatas_by_ids(existing_file_ids),
     )
+
+
+############################
+# AddUrlToKnowledge
+############################
+
+
+@router.post("/{id}/url/add", response_model=Optional[KnowledgeFilesResponse])
+def add_url_to_knowledge_by_id(
+    request: Request,
+    id: str,
+    form_data: KnowledgeUrlForm,
+    user=Depends(get_verified_user),
+):
+    """
+    Add a URL to a knowledge base using FireCrawl loader.
+
+    This endpoint accepts a URL and processes it using the FireCrawl service
+    to extract content and add it to the specified knowledge base.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id)
+
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "write", knowledge.access_control)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    try:
+        # Extract WebSocket session info for real-time updates
+        session_id = request.headers.get("X-Session-ID")
+
+        try:
+            event_emitter = get_event_emitter(
+                {
+                    "session_id": session_id,
+                    "user_id": user.id,
+                    "chat_id": None,  # Not a chat operation
+                    "message_id": None,  # Not a chat operation
+                }
+            )
+        except Exception as e:
+            log.warning(f"Could not create event emitter: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.FILE_NOT_PROCESSED,
+            )
+
+        # Initialize the loader with FireCrawl engine and WebSocket support
+        loader_instance = Loader(
+            engine="firecrawl",
+            FIRECRAWL_API_KEY=request.app.state.config.FIRECRAWL_API_KEY,
+            FIRECRAWL_API_BASE_URL=request.app.state.config.FIRECRAWL_API_BASE_URL,
+            event_emitter=event_emitter,
+            user_id=user.id,
+            knowledge_id=id,
+        )
+
+        # Load documents from the URL using the generic loader
+        docs = loader_instance.load_url(
+            url=form_data.url,
+            mode=form_data.mode,
+        )
+
+        if not docs:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No content could be extracted from the URL",
+            )
+
+        # Create a virtual file for this URL content
+        file_id = str(uuid.uuid4())
+        content = "\n\n".join([doc.page_content for doc in docs])
+
+        # Prepare metadata from the first document
+        first_doc_metadata = docs[0].metadata if docs else {}
+        title = first_doc_metadata.get("title", form_data.url)
+
+        # Create file entry
+        file_form = FileForm(
+            id=file_id,
+            filename=title,
+            path="",  # Virtual file has no physical path
+            data={
+                "content": content,
+                "url": form_data.url,
+                "loader_engine": "firecrawl",
+            },
+            meta={
+                "name": title,
+                "content_type": "text/plain",
+                "size": len(content.encode("utf-8")),
+                "source": form_data.url,
+                **first_doc_metadata,
+            },
+        )
+
+        # Insert the virtual file
+        file_item = Files.insert_new_file(user.id, file_form)
+
+        if not file_item:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create file entry for URL content",
+            )
+
+        # Process the file content into the knowledge base vector database
+        try:
+            # Create documents with proper metadata for vector storage
+            vector_docs = [
+                Document(
+                    page_content=doc.page_content,
+                    metadata={
+                        **doc.metadata,
+                        "name": title,
+                        "created_by": user.id,
+                        "file_id": file_id,
+                        "source": form_data.url,
+                        "knowledge_id": id,
+                    },
+                )
+                for doc in docs
+            ]
+
+            # Save to vector database using the knowledge base collection
+            if not request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL:
+                from open_webui.routers.retrieval import save_docs_to_vector_db
+
+                result = save_docs_to_vector_db(
+                    request,
+                    docs=vector_docs,
+                    collection_name=id,  # Use knowledge base ID as collection name
+                    metadata={
+                        "file_id": file_id,
+                        "name": title,
+                        "url": form_data.url,
+                    },
+                    add=True,  # Add to existing collection
+                    user=user,
+                )
+
+                if not result:
+                    # Clean up the file if vector storage failed
+                    Files.delete_file_by_id(file_id)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to add URL content to knowledge base",
+                    )
+
+            # Update file metadata with collection info
+            Files.update_file_metadata_by_id(
+                file_id,
+                {"collection_name": id},
+            )
+
+            # Add file to knowledge base
+            data = knowledge.data or {}
+            file_ids = data.get("file_ids", [])
+
+            if file_id not in file_ids:
+                file_ids.append(file_id)
+                data["file_ids"] = file_ids
+
+                knowledge = Knowledges.update_knowledge_data_by_id(id=id, data=data)
+
+                if knowledge:
+                    files = Files.get_file_metadatas_by_ids(file_ids)
+
+                    return KnowledgeFilesResponse(
+                        **knowledge.model_dump(),
+                        files=files,
+                    )
+                else:
+                    # Clean up if knowledge update failed
+                    Files.delete_file_by_id(file_id)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to update knowledge base",
+                    )
+            else:
+                # File already exists in knowledge base
+                files = Files.get_file_metadatas_by_ids(file_ids)
+                return KnowledgeFilesResponse(
+                    **knowledge.model_dump(),
+                    files=files,
+                )
+
+        except Exception as e:
+            # Clean up the file if processing failed
+            Files.delete_file_by_id(file_id)
+            log.exception(f"Error processing URL content: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to process URL content: {str(e)}",
+            )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        log.exception(
+            f"HTTPException occurred while adding URL to knowledge base: {form_data.url}"
+        )
+        raise
+    except Exception as e:
+        log.exception(f"Error adding URL to knowledge base: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}",
+        )

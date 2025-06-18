@@ -15,7 +15,8 @@
 		knowledge as _knowledge,
 		config,
 		user,
-		settings
+		settings,
+		socket
 	} from '$lib/stores';
 
 	import {
@@ -26,6 +27,7 @@
 	} from '$lib/apis/files';
 	import {
 		addFileToKnowledgeById,
+		addUrlToKnowledgeById,
 		getKnowledgeById,
 		getKnowledgeBases,
 		removeFileFromKnowledgeById,
@@ -41,6 +43,7 @@
 
 	import AddContentMenu from './KnowledgeBase/AddContentMenu.svelte';
 	import AddTextContentModal from './KnowledgeBase/AddTextContentModal.svelte';
+	import AddUrlModal from './KnowledgeBase/AddUrlModal.svelte';
 
 	import SyncConfirmDialog from '../../common/ConfirmDialog.svelte';
 	import RichTextInput from '$lib/components/common/RichTextInput.svelte';
@@ -73,6 +76,8 @@
 	let showAddTextContentModal = false;
 	let showSyncConfirmModal = false;
 	let showAccessControlModal = false;
+	let showAddUrlModal = false;
+
 
 	let inputFiles = null;
 
@@ -533,6 +538,52 @@
 		}
 	};
 
+	// WebSocket event handler for knowledge crawl events
+	const knowledgeCrawlEventHandler = async (event) => {
+		const type = event?.data?.type ?? null;
+		const data = event?.data?.data ?? null;
+
+		if (type === 'status' && data?.action === 'knowledge_crawl_complete') {
+			// Check if this event is for our knowledge base
+			if (data?.knowledge_id === id) {
+				console.log('Knowledge crawl completed for:', data);
+				
+				// Show completion notification
+				if (data?.status === 'completed') {
+					toast.success(
+						$i18n.t('Crawling completed successfully! {{count}} pages processed.', {
+							count: data?.page_count || 0
+						})
+					);
+				} else if (data?.status === 'failed') {
+					toast.error($i18n.t('Crawling failed: {{error}}', { error: data?.error || 'Unknown error' }));
+				}
+
+				// Refresh knowledge base data
+				try {
+					const res = await getKnowledgeById(localStorage.token, id);
+					if (res) {
+						knowledge = res;
+						// Clear file content cache to force refresh
+						fileContentCache.clear();
+					}
+				} catch (e) {
+					console.error('Failed to refresh knowledge base:', e);
+				}
+			}
+		} else if (type === 'status' && data?.action === 'knowledge_crawl') {
+			// Show progress updates
+			if (data?.knowledge_id === id) {
+				console.log('Knowledge crawl progress:', data);
+				toast.info(
+					$i18n.t('Crawling in progress... {{status}}', {
+						status: data?.status || 'Processing'
+					})
+				);
+			}
+		}
+	};
+
 	onMount(async () => {
 		// listen to resize 1024px
 		mediaQuery = window.matchMedia('(min-width: 1024px)');
@@ -583,6 +634,9 @@
 			goto('/workspace/knowledge');
 		}
 
+		// Set up WebSocket event listener for knowledge crawl events
+		$socket?.on('chat-events', knowledgeCrawlEventHandler);
+
 		const dropZone = document.querySelector('body');
 		dropZone?.addEventListener('dragover', onDragOver);
 		dropZone?.addEventListener('drop', onDrop);
@@ -591,6 +645,10 @@
 
 	onDestroy(() => {
 		mediaQuery?.removeEventListener('change', handleMediaQuery);
+		
+		// Clean up WebSocket event listener
+		$socket?.off('chat-events', knowledgeCrawlEventHandler);
+		
 		const dropZone = document.querySelector('body');
 		dropZone?.removeEventListener('dragover', onDragOver);
 		dropZone?.removeEventListener('drop', onDrop);
@@ -644,6 +702,46 @@
 	on:submit={(e) => {
 		const file = createFileFromText(e.detail.name, e.detail.content);
 		uploadFileHandler(file);
+	}}
+/>
+
+<AddUrlModal
+	bind:show={showAddUrlModal}
+	on:submit={async (e) => {
+		const url = e.detail.url;
+		const mode = e.detail.mode;
+		
+		// Create a temporary file entry
+		const tempItemId = uuidv4();
+		const fileItem = {
+			type: 'url',
+			file: '',
+			id: null,
+			url: url,
+			name: url,  // We'll update this with the page title later
+			size: 0,
+			status: 'uploading',
+			error: '',
+			itemId: tempItemId
+		};
+		
+		knowledge.files = [...(knowledge.files ?? []), fileItem];
+
+
+		// Add file to knowledge base using the ID from the response
+		const updatedKnowledge = await addUrlToKnowledgeById(localStorage.token, id, url, $socket?.id, mode).catch((e) => {
+			toast.error(e);
+			return null;
+		});
+
+		if (updatedKnowledge) {
+			knowledge = updatedKnowledge;
+			toast.success($i18n.t('URL processed successfully.'));
+		} else {
+			toast.error($i18n.t('Failed to add URL to knowledge base.'));
+			knowledge.files = knowledge.files.filter(f => f.itemId !== tempItemId);
+		}
+
 	}}
 />
 
@@ -890,6 +988,8 @@
 												uploadDirectoryHandler();
 											} else if (e.detail.type === 'text') {
 												showAddTextContentModal = true;
+											} else if (e.detail.type === 'url') {
+												showAddUrlModal = true;
 											} else {
 												document.getElementById('files-input').click();
 											}
