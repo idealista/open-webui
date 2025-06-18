@@ -4,16 +4,6 @@ pipeline {
         label 'docker'
     }
 
-    // This directive ensures the pipeline only runs for specific branches.
-    // 'anyOf' allows specifying multiple conditions.
-    // The build will only proceed if the current branch is 'master' OR 'dev'.
-    when {
-        anyOf {
-            branch 'master'
-            branch 'dev'
-        }
-    }
-
     environment {
         REGISTRY = 'nexus.int.sys.idealista:9081'
         BASE_IMAGE_NAME = "${REGISTRY}/open-webui"
@@ -21,18 +11,24 @@ pipeline {
     stages {
         // Stage to determine the correct tag based on the branch
         stage('Setup Tag') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 script {
                     def targetTag
                     // Determine the tag based on the branch name
-                    if (env.BRANCH_NAME == 'master') {
+                    if (env.GIT_LOCAL_BRANCH == 'master') {
                         targetTag = 'latest'
-                    } else if (env.BRANCH_NAME == 'dev') {
+                    } else if (env.GIT_LOCAL_BRANCH == 'dev') {
                         targetTag = 'dev'
                     } else {
                          // This case should theoretically not be reached due to the 'when' clause,
                          // but it's good for robustness.
-                         error("Pipeline misconfiguration: Building on unexpected branch '${env.BRANCH_NAME}'. Expected 'master' or 'dev'.")
+                         error("Pipeline misconfiguration: Building on unexpected branch '${env.GIT_LOCAL_BRANCH}'. Expected 'master' or 'dev'.")
                     }
 
                     // Set environment variables that subsequent stages will use
@@ -48,6 +44,12 @@ pipeline {
         }
 
         stage('Build image') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 echo "Building Docker image: ${env.FULL_TARGET_IMAGE}"
                 // Build the image using the Dockerfile in the root of the repo
@@ -57,6 +59,12 @@ pipeline {
         }
 
         stage('Test image') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 echo "Testing Docker image: ${env.FULL_TARGET_IMAGE}"
                 // TODO: Add your image testing logic here
@@ -65,6 +73,12 @@ pipeline {
         }
 
         stage('Push image') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'master'
+                }
+            }
             steps {
                 echo "Pushing Docker image ${env.FULL_TARGET_IMAGE} to ${env.REGISTRY}"
                 sh "docker push ${env.FULL_TARGET_IMAGE}"
