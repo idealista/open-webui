@@ -23,10 +23,11 @@ from langchain_community.document_loaders import (
 from langchain_core.documents import Document
 
 from open_webui.retrieval.loaders.external_document import ExternalDocumentLoader
-
+from open_webui.retrieval.loaders.firecrawl import FireCrawlLoader
 from open_webui.retrieval.loaders.mistral import MistralLoader
 from open_webui.retrieval.loaders.datalab_marker import DatalabMarkerLoader
 
+from open_webui.models.knowledge import ExtractUrlMode
 
 from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL
 
@@ -224,10 +225,74 @@ class Loader:
             for doc in docs
         ]
 
+    def load_url(
+        self,
+        url: str,
+        mode: ExtractUrlMode,
+    ) -> list[Document]:
+        """
+        Load documents from a URL using the configured URL loader engine.
+
+        Args:
+            url: The URL to load content from
+            mode: The loading mode (e.g., 'scrape', 'crawl' for FireCrawl)
+
+        Returns:
+            List of Document objects containing the loaded content
+        """
+        loader = self._get_url_loader(url, mode)
+        docs = loader.load()
+
+        return [
+            Document(
+                page_content=ftfy.fix_text(doc.page_content), metadata=doc.metadata
+            )
+            for doc in docs
+        ]
+
     def _is_text_file(self, file_ext: str, file_content_type: str) -> bool:
         return file_ext in known_source_ext or (
             file_content_type and file_content_type.find("text/") >= 0
         )
+
+    def _get_url_loader(
+        self,
+        url: str,
+        mode: ExtractUrlMode = ExtractUrlMode.SCRAPE,
+    ):
+        """
+        Get the appropriate URL loader based on the configured engine.
+
+        Args:
+            url: The URL to load content from
+            mode: The loading mode
+
+        Returns:
+            A loader instance capable of processing the URL
+        """
+
+        # Currently only FireCrawl is supported, but this can be extended
+        if self.engine == "firecrawl":
+            firecrawl_api_key = self.kwargs.get("FIRECRAWL_API_KEY", "")
+            firecrawl_api_base_url = self.kwargs.get("FIRECRAWL_API_BASE_URL")
+            if not firecrawl_api_base_url:
+                raise ValueError(
+                    "FIRECRAWL_API_BASE_URL is required for FireCrawl URL loading."
+                )
+
+            loader = FireCrawlLoader(
+                urls=[url],
+                api_key=firecrawl_api_key,
+                api_url=firecrawl_api_base_url,
+                mode=mode,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported engine '{self.engine}' for URL loading. "
+                "Currently only 'firecrawl' is supported."
+            )
+
+        return loader
 
     def _get_loader(self, filename: str, file_content_type: str, file_path: str):
         file_ext = filename.split(".")[-1].lower()

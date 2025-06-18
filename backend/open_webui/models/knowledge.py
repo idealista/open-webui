@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import logging
 import time
@@ -219,3 +220,13 @@ class KnowledgeTable:
 
 
 Knowledges = KnowledgeTable()
+
+
+class ExtractUrlMode(str, Enum):
+    SCRAPE = "scrape"
+    CRAWL = "crawl"
+
+
+class KnowledgeUrlForm(BaseModel):
+    url: str
+    mode: ExtractUrlMode = ExtractUrlMode.SCRAPE

@@ -373,3 +373,55 @@ export const reindexKnowledgeFiles = async (token: string) => {
 
 	return res;
 };
+
+export const addUrlToKnowledgeById = async (
+	token: string,
+	id: string,
+	url: string,
+	sessionId?: string,
+	mode?: 'scrape' | 'crawl'
+) => {
+	let error = null;
+
+	const headers: Record<string, string> = {
+		Accept: 'application/json',
+		'Content-Type': 'application/json',
+		authorization: `Bearer ${token}`
+	};
+
+	if (sessionId) {
+		headers['x-session-id'] = sessionId;
+	}
+
+	const body: { url: string; mode?: 'scrape' | 'crawl' } = {
+		url: url,
+	};
+
+	if (mode) {
+		body.mode = mode;
+	}
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/${id}/url/add`, {
+		method: 'POST',
+		headers,
+		body: JSON.stringify(body)
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.then((json) => {
+			return json;
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
