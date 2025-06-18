@@ -4,16 +4,6 @@ pipeline {
         label 'docker'
     }
 
-    // This directive ensures the pipeline only runs for specific branches.
-    // 'anyOf' allows specifying multiple conditions.
-    // The build will only proceed if the current branch is 'master' OR 'dev'.
-    when {
-        anyOf {
-            branch 'master'
-            branch 'dev'
-        }
-    }
-
     environment {
         REGISTRY = 'nexus.int.sys.idealista:9081'
         BASE_IMAGE_NAME = "${REGISTRY}/open-webui"
